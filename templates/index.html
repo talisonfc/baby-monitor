@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Baby Monitor</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            max-width: 900px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+        }
+        
+        #video-stream {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 12px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        #toggle-audio {
+            background: #667eea;
+            color: white;
+        }
+        
+        #toggle-audio:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        #toggle-audio.muted {
+            background: #e74c3c;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 20px;
+            background: #f8f9fa;
+            border-radius: 25px;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #95a5a6;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-indicator.connected {
+            background: #2ecc71;
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+        
+        .info {
+            text-align: center;
+            margin-top: 20px;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+        
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .container {
+                padding: 20px;
+            }
+            
+            button {
+                padding: 10px 20px;
+                font-size: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👶 Baby Monitor</h1>
+        
+        <div class="video-container">
+            <img id="video-stream" src="{{ url_for('video_feed') }}" alt="Video Stream">
+        </div>
+        
+        <div class="controls">
+            <button id="toggle-audio">🔊 Audio On</button>
+            <div class="status">
+                <div class="status-indicator" id="connection-status"></div>
+                <span id="status-text">Connecting...</span>
+            </div>
+        </div>
+        
+        <div class="info">
+            <p>Video streaming at 640x480 | Audio streaming at 44.1kHz</p>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        let audioEnabled = false;
+        const toggleButton = document.getElementById('toggle-audio');
+        const statusIndicator = document.getElementById('connection-status');
+        const statusText = document.getElementById('status-text');
+        
+        // Connection status
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            statusIndicator.classList.add('connected');
+            statusText.textContent = 'Connected';
+        });
+        
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            statusIndicator.classList.remove('connected');
+            statusText.textContent = 'Disconnected';
+            audioEnabled = false;
+            toggleButton.textContent = '🔊 Audio On';
+            toggleButton.classList.remove('muted');
+        });
+        
+        // Audio streaming
+        socket.on('audio_data', async (audioData) => {
+            if (!audioEnabled) return;
+            
+            try {
+                // Convert base64 to ArrayBuffer
+                const binaryString = atob(audioData);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                // Convert Int16 to Float32 for Web Audio API
+                const int16Array = new Int16Array(bytes.buffer);
+                const float32Array = new Float32Array(int16Array.length);
+                for (let i = 0; i < int16Array.length; i++) {
+                    float32Array[i] = int16Array[i] / 32768.0; // Normalize to -1.0 to 1.0
+                }
+                
+                // Create audio buffer and play
+                const audioBuffer = audioContext.createBuffer(1, float32Array.length, 44100);
+                audioBuffer.getChannelData(0).set(float32Array);
+                
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+                source.start();
+            } catch (error) {
+                console.error('Error playing audio:', error);
+            }
+        });
+        
+        // Toggle audio
+        toggleButton.addEventListener('click', () => {
+            audioEnabled = !audioEnabled;
+            
+            if (audioEnabled) {
+                // Resume audio context (required by browser policies)
+                audioContext.resume();
+                toggleButton.textContent = '🔇 Audio Off';
+                toggleButton.classList.add('muted');
+                socket.emit('start_audio');
+            } else {
+                toggleButton.textContent = '🔊 Audio On';
+                toggleButton.classList.remove('muted');
+                socket.emit('stop_audio');
+            }
+        });
+    </script>
+</body>
+</html>
