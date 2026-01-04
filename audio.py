@@ -1,31 +1,34 @@
 import pyaudio
-import sys
 
-arg1 = sys.argv[1]
+def get_webcam_mic_index(keywords=["USB", "Webcam", "Camera"]):
+    p = pyaudio.PyAudio()
+    device_index = None
+    
+    for i in range(p.get_device_count()):
+        info = p.get_device_info_by_index(i)
+        # Verifica se o dispositivo é de entrada e contém palavras-chave
+        if info.get('maxInputChannels') > 0:
+            name = info.get('name')
+            if any(key.lower() in name.lower() for key in keywords):
+                print(f"[INFO] Webcam detectada: {name} no Índice {i}")
+                device_index = i
+                break
+    
+    p.terminate()
+    return device_index
 
-# Configurações comuns para microfones de câmera USB
-FORMAT = pyaudio.paInt16
-CHANNELS = 1          # A maioria das câmeras USB é mono
-RATE = 44100          # Taxa de amostragem padrão
-CHUNK = 1024          # Tamanho do buffer
-DEVICE_INDEX = int(arg1)      # Substitua pelo índice encontrado no passo anterior
+# Configuração automática dos parâmetros
+MIC_INDEX = get_webcam_mic_index()
 
-audio = pyaudio.PyAudio()
-
-# Abrir o stream
-stream = audio.open(format=FORMAT,
-                    channels=CHANNELS,
-                    rate=RATE,
-                    input=True,
-                    input_device_index=DEVICE_INDEX,
-                    frames_per_buffer=CHUNK)
-
-print("Gravando...")
-try:
-    while True:
-        data = stream.read(CHUNK, exception_on_overflow=False)
-        # 'data' contém os bytes brutos do áudio para processamento
-finally:
-    stream.stop_stream()
-    stream.close()
-    audio.terminate()
+if MIC_INDEX is not None:
+    PARAMS = {
+        "format": pyaudio.paInt16,
+        "channels": 1,
+        "rate": 44100,
+        "input_device_index": MIC_INDEX,
+        "input": True,
+        "frames_per_buffer": 1024
+    }
+    print(f"Parâmetros configurados para o índice {MIC_INDEX}")
+else:
+    print("Erro: Microfone da webcam não encontrado.")
