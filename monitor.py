@@ -2,7 +2,6 @@ import cv2
 import pyaudio
 import base64
 import threading
-import sys
 
 from flask import Flask, render_template, Response
 from flask_socketio import SocketIO, emit
@@ -24,7 +23,6 @@ CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
-DEVICE_INDEX = int(arg1)
 
 # PyAudio setup
 p = pyaudio.PyAudio()
@@ -70,7 +68,6 @@ def stream_audio():
             channels=CHANNELS,
             rate=RATE,
             input=True,
-            input_device_index=DEVICE_INDEX,
             frames_per_buffer=CHUNK
         )
         
