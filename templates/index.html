@@ -152,6 +152,7 @@
         
         <div class="controls">
             <button id="toggle-audio">🔊 Audio On</button>
+            <button id="test-socket" style="background: #3498db;">🔧 Test Socket</button>
             <div class="status">
                 <div class="status-indicator" id="connection-status"></div>
                 <span id="status-text">Connecting...</span>
@@ -191,6 +192,8 @@
         socket.on('audio_data', async (audioData) => {
             if (!audioEnabled) return;
             
+            console.log('Received audio data, length:', audioData.length);
+            
             try {
                 // Convert base64 to ArrayBuffer
                 const binaryString = atob(audioData);
@@ -214,25 +217,58 @@
                 source.buffer = audioBuffer;
                 source.connect(audioContext.destination);
                 source.start();
+                
+                console.log('Audio played successfully');
             } catch (error) {
                 console.error('Error playing audio:', error);
             }
         });
         
+        // Audio error handling
+        socket.on('audio_error', (data) => {
+            console.error('Audio error:', data.error);
+            alert('Audio Error: ' + data.error + '\n\nPlease check your microphone permissions and device.');
+            audioEnabled = false;
+            toggleButton.textContent = '🔊 Audio On';
+            toggleButton.classList.remove('muted');
+        });
+        
+        // Test socket response
+        socket.on('test_response', (data) => {
+            console.log('Test response:', data);
+            alert('Socket communication working! ' + data.message);
+        });
+        
+        // Test socket button
+        document.getElementById('test-socket').addEventListener('click', () => {
+            console.log('Sending test event...');
+            socket.emit('test_event');
+        });
+        
         // Toggle audio
         toggleButton.addEventListener('click', () => {
+            console.log('=== Toggle Audio Button Clicked ===');
+            console.log('Current audio state:', audioEnabled ? 'Enabled' : 'Disabled');
+            console.log('Socket connected:', socket.connected);
+            
             audioEnabled = !audioEnabled;
             
             if (audioEnabled) {
+                console.log('Enabling audio...');
                 // Resume audio context (required by browser policies)
                 audioContext.resume();
                 toggleButton.textContent = '🔇 Audio Off';
                 toggleButton.classList.add('muted');
+                console.log('Emitting start_audio event...');
                 socket.emit('start_audio');
+                console.log('start_audio event emitted');
             } else {
+                console.log('Disabling audio...');
                 toggleButton.textContent = '🔊 Audio On';
                 toggleButton.classList.remove('muted');
+                console.log('Emitting stop_audio event...');
                 socket.emit('stop_audio');
+                console.log('stop_audio event emitted');
             }
         });
     </script>
