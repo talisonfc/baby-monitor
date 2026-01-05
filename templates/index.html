@@ -126,6 +126,32 @@
             font-size: 14px;
         }
         
+        .ios-help {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+            display: none;
+        }
+        
+        .ios-help h3 {
+            color: #856404;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        .ios-help ul {
+            text-align: left;
+            color: #856404;
+            font-size: 13px;
+            margin-left: 20px;
+        }
+        
+        .ios-help li {
+            margin-bottom: 5px;
+        }
+        
         @media (max-width: 768px) {
             h1 {
                 font-size: 1.8em;
@@ -152,47 +178,120 @@
         
         <div class="controls">
             <button id="toggle-audio">🔊 Audio On</button>
-            <button id="test-socket" style="background: #3498db;">🔧 Test Socket</button>
             <div class="status">
                 <div class="status-indicator" id="connection-status"></div>
                 <span id="status-text">Connecting...</span>
+            </div>
+            <div class="status" id="audio-status" style="display: none;">
+                <div class="status-indicator connected"></div>
+                <span id="audio-status-text">Playing</span>
             </div>
         </div>
         
         <div class="info">
             <p>Video streaming at 640x480 | Audio streaming at 44.1kHz</p>
         </div>
+        
+        <div class="ios-help" id="ios-help">
+            <h3>📱 iPhone Audio Setup</h3>
+            <ul>
+                <li>Turn <strong>volume UP</strong> to maximum</li>
+                <li>Turn <strong>Silent Mode OFF</strong> (check switch on left side)</li>
+                <li>Keep this tab <strong>active</strong> (don't switch apps)</li>
+                <li>Wait 5-10 seconds after enabling audio</li>
+                <li>If no sound: close tab completely and reopen</li>
+            </ul>
+        </div>
     </div>
 
     <script>
         const socket = io();
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         let audioEnabled = false;
         const toggleButton = document.getElementById('toggle-audio');
         const statusIndicator = document.getElementById('connection-status');
         const statusText = document.getElementById('status-text');
+        const audioStatusDiv = document.getElementById('audio-status');
+        const audioStatusText = document.getElementById('audio-status-text');
         
-        // Connection status
-        socket.on('connect', () => {
-            console.log('Connected to server');
-            statusIndicator.classList.add('connected');
-            statusText.textContent = 'Connected';
-        });
+        // Detect mobile device
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+        console.log('🔍 Device type:', isMobile ? 'Mobile' : 'Desktop');
+        console.log('🔍 iOS:', isIOS);
+        console.log('🔍 User agent:', navigator.userAgent);
         
-        socket.on('disconnect', () => {
-            console.log('Disconnected from server');
-            statusIndicator.classList.remove('connected');
-            statusText.textContent = 'Disconnected';
-            audioEnabled = false;
-            toggleButton.textContent = '🔊 Audio On';
-            toggleButton.classList.remove('muted');
-        });
+        // Show iOS help if on iOS
+        if (isIOS) {
+            document.getElementById('ios-help').style.display = 'block';
+        }
         
-        // Audio streaming
-        socket.on('audio_data', async (audioData) => {
-            if (!audioEnabled) return;
+        // Audio playback using Web Audio API with better buffering
+        let audioContext = null;
+        let gainNode = null;
+        let audioQueue = [];
+        let nextStartTime = 0;
+        let isPlaying = false;
+        let audioChunksReceived = 0;
+        const SAMPLE_RATE = 44100;
+        
+        async function initAudioContext() {
+            if (!audioContext) {
+                try {
+                    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                    audioContext = new AudioContextClass({
+                        latencyHint: 'interactive',
+                        sampleRate: SAMPLE_RATE
+                    });
+                    
+                    // Create gain node for volume control
+                    gainNode = audioContext.createGain();
+                    gainNode.gain.value = isMobile ? 5.0 : 2.0; // Much higher boost for mobile
+                    gainNode.connect(audioContext.destination);
+                    
+                    console.log('✅ Audio context created');
+                    console.log('Sample rate:', audioContext.sampleRate);
+                    console.log('State:', audioContext.state);
+                } catch (error) {
+                    console.error('❌ Failed to create audio context:', error);
+                    throw error;
+                }
+            }
             
-            console.log('Received audio data, length:', audioData.length);
+            // Resume audio context (required for mobile) - try multiple times
+            let attempts = 0;
+            while (audioContext.state !== 'running' && attempts < 5) {
+                attempts++;
+                console.log(`🔄 Attempt ${attempts} to resume audio context...`);
+                await audioContext.resume();
+                await new Promise(resolve => setTimeout(resolve, 100));
+                console.log('Audio context state:', audioContext.state);
+            }
+            
+            if (audioContext.state !== 'running') {
+                throw new Error('Failed to start audio context after ' + attempts + ' attempts. State: ' + audioContext.state);
+            }
+            
+            console.log('✅ Audio context resumed, state:', audioContext.state);
+            return audioContext;
+        }
+        
+        async function scheduleAudioChunk(audioData) {
+            if (!audioContext) {
+                console.warn('⚠️ No audio context');
+                return;
+            }
+            
+            // Resume if suspended (critical for mobile)
+            if (audioContext.state !== 'running') {
+                console.warn('⚠️ Audio context suspended, resuming...');
+                try {
+                    await audioContext.resume();
+                    console.log('✅ Audio context resumed');
+                } catch (error) {
+                    console.error('❌ Failed to resume:', error);
+                    return;
+                }
+            }
             
             try {
                 // Convert base64 to ArrayBuffer
@@ -202,73 +301,220 @@
                     bytes[i] = binaryString.charCodeAt(i);
                 }
                 
-                // Convert Int16 to Float32 for Web Audio API
+                // Convert Int16 to Float32
                 const int16Array = new Int16Array(bytes.buffer);
                 const float32Array = new Float32Array(int16Array.length);
                 for (let i = 0; i < int16Array.length; i++) {
-                    float32Array[i] = int16Array[i] / 32768.0; // Normalize to -1.0 to 1.0
+                    float32Array[i] = int16Array[i] / 32768.0;
                 }
                 
-                // Create audio buffer and play
-                const audioBuffer = audioContext.createBuffer(1, float32Array.length, 44100);
+                // Create audio buffer
+                const audioBuffer = audioContext.createBuffer(1, float32Array.length, SAMPLE_RATE);
                 audioBuffer.getChannelData(0).set(float32Array);
                 
+                // Create buffer source and schedule
                 const source = audioContext.createBufferSource();
                 source.buffer = audioBuffer;
-                source.connect(audioContext.destination);
-                source.start();
                 
-                console.log('Audio played successfully');
+                // Connect through gain node (volume control works on all devices)
+                source.connect(gainNode);
+                
+                // Schedule seamless playback
+                const currentTime = audioContext.currentTime;
+                if (nextStartTime < currentTime) {
+                    nextStartTime = currentTime + 0.01; // Small delay for iPhone
+                }
+                
+                source.start(nextStartTime);
+                nextStartTime += audioBuffer.duration;
+                
+                audioChunksReceived++;
+                if (audioChunksReceived % 10 === 0) {
+                    console.log(`🔊 Playing audio chunk #${audioChunksReceived}, next at:`, nextStartTime.toFixed(3));
+                }
+                
+                // Update UI to show audio is playing
+                if (audioChunksReceived === 1 || audioChunksReceived % 50 === 0) {
+                    audioStatusDiv.style.display = 'flex';
+                    audioStatusText.textContent = `Playing (${audioChunksReceived} chunks)`;
+                }
+                
             } catch (error) {
-                console.error('Error playing audio:', error);
+                console.error('❌ Error scheduling audio:', error);
             }
+        }
+        
+        async function processAudioQueue() {
+            while (audioQueue.length > 0) {
+                const chunk = audioQueue.shift();
+                await scheduleAudioChunk(chunk);
+            }
+        }
+        
+        // Keep audio context alive on mobile
+        function keepAudioContextAlive() {
+            if (audioEnabled && audioContext && audioContext.state === 'suspended') {
+                console.warn('⚠️ Audio context suspended, attempting to resume...');
+                audioContext.resume().then(() => {
+                    console.log('✅ Audio context resumed by keepAlive');
+                });
+            }
+        }
+        
+        // Check audio context state every second
+        setInterval(keepAudioContextAlive, 1000);
+
+        
+        // Connection status
+        socket.on('connect', () => {
+            console.log('✅ Connected to server');
+            statusIndicator.classList.add('connected');
+            statusText.textContent = 'Connected';
+        });
+        
+        socket.on('disconnect', () => {
+            console.log('❌ Disconnected from server');
+            statusIndicator.classList.remove('connected');
+            statusText.textContent = 'Disconnected';
+        });
+        
+        // Audio streaming with buffering
+        socket.on('audio_data', (audioData) => {
+            if (!audioEnabled || !audioContext) {
+                return;
+            }
+            
+            // Resume context if suspended (iPhone Safari fix)
+            if (audioContext.state === 'suspended') {
+                console.warn('⚠️ Context suspended, resuming...');
+                audioContext.resume();
+            }
+            
+            if (audioChunksReceived % 20 === 0) {
+                console.log('📥 Audio data received, queue size:', audioQueue.length, 'chunks received:', audioChunksReceived);
+            }
+            
+            // Add to queue
+            audioQueue.push(audioData);
+            
+            // Keep queue small (max 3 chunks to minimize latency)
+            while (audioQueue.length > 3) {
+                audioQueue.shift();
+                console.log('⚠️ Dropped old chunk');
+            }
+            
+            // Process queue
+            processAudioQueue();
         });
         
         // Audio error handling
         socket.on('audio_error', (data) => {
-            console.error('Audio error:', data.error);
-            alert('Audio Error: ' + data.error + '\n\nPlease check your microphone permissions and device.');
+            console.error('❌ Server audio error:', data.error);
+            alert('Server Audio Error: ' + data.error);
             audioEnabled = false;
             toggleButton.textContent = '🔊 Audio On';
             toggleButton.classList.remove('muted');
         });
         
-        // Test socket response
-        socket.on('test_response', (data) => {
-            console.log('Test response:', data);
-            alert('Socket communication working! ' + data.message);
-        });
-        
-        // Test socket button
-        document.getElementById('test-socket').addEventListener('click', () => {
-            console.log('Sending test event...');
-            socket.emit('test_event');
-        });
-        
         // Toggle audio
-        toggleButton.addEventListener('click', () => {
-            console.log('=== Toggle Audio Button Clicked ===');
-            console.log('Current audio state:', audioEnabled ? 'Enabled' : 'Disabled');
-            console.log('Socket connected:', socket.connected);
+        toggleButton.addEventListener('click', async () => {
+            console.log('=== Audio Toggle ===');
+            console.log('Current state:', audioEnabled ? 'ON' : 'OFF');
             
-            audioEnabled = !audioEnabled;
+            // Haptic feedback on iOS
+            if (isIOS && navigator.vibrate) {
+                navigator.vibrate(50);
+            }
             
-            if (audioEnabled) {
-                console.log('Enabling audio...');
-                // Resume audio context (required by browser policies)
-                audioContext.resume();
-                toggleButton.textContent = '🔇 Audio Off';
-                toggleButton.classList.add('muted');
-                console.log('Emitting start_audio event...');
-                socket.emit('start_audio');
-                console.log('start_audio event emitted');
+            if (!audioEnabled) {
+                // ENABLE AUDIO
+                try {
+                    console.log('🔊 Initializing audio...');
+                    
+                    // Initialize audio context in user gesture
+                    await initAudioContext();
+                    
+                    if (audioContext.state !== 'running') {
+                        throw new Error('Audio context state: ' + audioContext.state);
+                    }
+                    
+                    console.log('✅ Audio context running');
+                    console.log('Sample rate:', audioContext.sampleRate);
+                    console.log('State:', audioContext.state);
+                    console.log('Base latency:', audioContext.baseLatency);
+                    
+                    // iPhone CRITICAL: Play a longer silent/quiet buffer with proper gain
+                    // This truly unlocks audio on iOS Safari
+                    const unlockDuration = 0.1; // 100ms
+                    const unlockBuffer = audioContext.createBuffer(1, audioContext.sampleRate * unlockDuration, audioContext.sampleRate);
+                    const channelData = unlockBuffer.getChannelData(0);
+                    
+                    // Fill with quiet sine wave instead of silence
+                    // iOS sometimes ignores completely silent buffers
+                    for (let i = 0; i < channelData.length; i++) {
+                        channelData[i] = Math.sin(2 * Math.PI * 440 * i / audioContext.sampleRate) * 0.01;
+                    }
+                    
+                    const unlockSource = audioContext.createBufferSource();
+                    unlockSource.buffer = unlockBuffer;
+                    
+                    // Create dedicated unlock gain node
+                    const unlockGain = audioContext.createGain();
+                    unlockGain.gain.value = isMobile ? 0.1 : 0.01; // Louder on mobile for better unlock
+                    
+                    unlockSource.connect(unlockGain);
+                    unlockGain.connect(audioContext.destination);
+                    unlockSource.start(0);
+                    
+                    // Wait for unlock buffer to complete
+                    await new Promise(resolve => setTimeout(resolve, 150));
+                    console.log('✅ Audio unlock buffer played, context state:', audioContext.state);
+                    
+                    // Verify context is truly running
+                    if (audioContext.state !== 'running') {
+                        throw new Error('Audio context still not running after unlock. State: ' + audioContext.state);
+                    }
+                    
+                    // Reset counter
+                    audioChunksReceived = 0;
+                    
+                    // Enable
+                    audioEnabled = true;
+                    nextStartTime = audioContext.currentTime;
+                    toggleButton.textContent = '🔇 Audio Off';
+                    toggleButton.classList.add('muted');
+                    
+                    // Request stream
+                    console.log('📤 Requesting audio stream...');
+                    socket.emit('start_audio');
+                    console.log('✅ Audio enabled successfully!');
+                    
+                    // Show alert for mobile users
+                    if (isMobile) {
+                        setTimeout(() => {
+                            alert('🔊 Audio Enabled!\n\nIMPORTANT for iPhone:\n• TURN VOLUME UP to maximum\n• DISABLE Silent Mode (check switch)\n• Keep this tab ACTIVE\n• Check "Playing" appears below\n• Wait 5-10 seconds for audio\n\nIf no sound: Close tab and reopen');
+                        }, 100);
+                    }
+                    
+                } catch (error) {
+                    console.error('❌ Failed:', error);
+                    alert('Failed to start audio:\n' + error.message + '\n\nTry:\n1. Refresh the page\n2. Check volume settings\n3. Disable silent mode');
+                    audioEnabled = false;
+                    toggleButton.textContent = '🔊 Audio On';
+                    toggleButton.classList.remove('muted');
+                }
+                
             } else {
-                console.log('Disabling audio...');
+                // DISABLE AUDIO
+                console.log('🔇 Disabling audio...');
+                audioEnabled = false;
                 toggleButton.textContent = '🔊 Audio On';
                 toggleButton.classList.remove('muted');
-                console.log('Emitting stop_audio event...');
+                audioQueue = [];
+                audioChunksReceived = 0;
+                audioStatusDiv.style.display = 'none';
                 socket.emit('stop_audio');
-                console.log('stop_audio event emitted');
+                console.log('✅ Audio disabled');
             }
         });
     </script>

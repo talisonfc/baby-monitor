@@ -132,12 +132,6 @@ def handle_disconnect():
     """Handle client disconnection"""
     print(f"Client disconnected")
 
-@socketio.on('test_event')
-def handle_test():
-    """Test event handler"""
-    print("TEST EVENT RECEIVED!")
-    emit('test_response', {'message': 'Test successful!'})
-
 @socketio.on('start_audio')
 def handle_start_audio():
     """Start audio streaming"""
@@ -183,7 +177,7 @@ if __name__ == '__main__':
     
     try:
         # Run the server
-        socketio.run(app, host='0.0.0.0', port=8080, debug=False)
+        socketio.run(app, host='0.0.0.0', port=8080, debug=False, log_output=False)
     finally:
         # Cleanup
         camera.release()
